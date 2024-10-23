@@ -40,3 +40,6 @@ docker-compose --version
 
 echo "Docker and Docker Compose have been successfully installed."
 echo "Please log out and log back in to apply the changes for user group permissions."
+
+
+## curl -fsSL https://raw.githubusercontent.com/IEatLemons/Quick-Installation/main/ins-docker.sh | bash
