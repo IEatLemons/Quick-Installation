@@ -6,8 +6,10 @@ This repository provides a one-step installation script for Docker and Docker Co
 To install Docker and Docker Compose on Ubuntu, simply run the following command:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/IEatLemons/Quick-Installation/main/ins-docker.sh | bash
+```
 
 ## Installation
 To Quickly create an account with root privileges
 ```bash
 curl -fsSL https://raw.githubusercontent.com/IEatLemons/Quick-Installation/main/user_management.sh | bash
+```
