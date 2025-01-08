@@ -2,8 +2,16 @@
 
 # Function to create a user
 create_user() {
+    # Prompt for username
     read -p "Enter the username to create: " USERNAME
 
+    # Validate username input
+    if [[ -z "$USERNAME" ]]; then
+        echo "Error: Username cannot be empty."
+        exit 1
+    fi
+
+    # Check if the user already exists
     if id "$USERNAME" &>/dev/null; then
         echo "User $USERNAME already exists."
         read -p "Do you want to delete the existing user and recreate it? (y/n): " CHOICE
