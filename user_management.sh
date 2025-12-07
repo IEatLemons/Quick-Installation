@@ -2,8 +2,10 @@
 
 # Function to create a user
 create_user() {
-    # Prompt for username
-    read -p "Enter the username to create: " USERNAME
+    # Check if username is provided as an argument
+    if [[ -z "$USERNAME" ]]; then
+        read -p "Enter the username to create: " USERNAME
+    fi
 
     # Validate username input
     if [[ -z "$USERNAME" ]]; then
@@ -34,6 +36,7 @@ create_user() {
     useradd -m -s /bin/bash "$USERNAME" || { echo "Failed to create user."; exit 1; }
 
     # Prompt for password
+    echo "Set password for $USERNAME:"
     passwd "$USERNAME"
 
     # Grant sudo privileges
@@ -44,4 +47,8 @@ create_user() {
 }
 
 # Main script execution
+if [[ -n "$1" ]]; then
+    USERNAME="$1"
+fi
+
 create_user
