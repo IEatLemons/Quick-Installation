@@ -106,42 +106,158 @@ sudo apt install -y apt-transport-https ca-certificates curl software-properties
     exit 1
 }
 
+# Clean up any existing Docker repository configuration
+print_info "清理旧的 Docker 仓库配置..."
+sudo rm -f /etc/apt/sources.list.d/docker.list
+sudo rm -f /usr/share/keyrings/docker-archive-keyring.gpg
+sudo rm -f /etc/apt/keyrings/docker.gpg
+
+# Create keyrings directory if it doesn't exist
+sudo mkdir -p /usr/share/keyrings
+sudo mkdir -p /etc/apt/keyrings
+
 # Add Docker's official GPG key
 print_info "添加 Docker GPG 密钥..."
+GPG_SUCCESS=false
+
+# Try multiple methods to import GPG key
 if [[ "$REGION" == "CN" ]]; then
-    # Use Aliyun mirror for GPG key
-    curl -fsSL ${DOCKER_MIRROR}/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg || {
+    # Method 1: Try Aliyun mirror
+    print_info "尝试从阿里云镜像获取 GPG 密钥..."
+    if curl -fsSL ${DOCKER_MIRROR}/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null; then
+        GPG_SUCCESS=true
+    else
         print_warn "从镜像源获取 GPG 密钥失败，尝试使用官方源..."
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg || {
-            print_error "添加 GPG 密钥失败"
-            exit 1
-        }
-    }
-else
-    curl -fsSL ${DOCKER_MIRROR}/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg || {
-        print_error "添加 GPG 密钥失败"
-        exit 1
-    }
+    fi
 fi
+
+# Method 2: Try official source
+if [[ "$GPG_SUCCESS" == false ]]; then
+    print_info "从官方源获取 GPG 密钥..."
+    if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null; then
+        GPG_SUCCESS=true
+    fi
+fi
+
+# Method 3: Try alternative method using apt-key (deprecated but sometimes works)
+if [[ "$GPG_SUCCESS" == false ]]; then
+    print_warn "尝试使用备用方法导入 GPG 密钥..."
+    if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --no-default-keyring --keyring /usr/share/keyrings/docker-archive-keyring.gpg --import 2>/dev/null; then
+        GPG_SUCCESS=true
+    fi
+fi
+
+# Method 4: Direct key import using apt-key (fallback)
+if [[ "$GPG_SUCCESS" == false ]]; then
+    print_warn "尝试直接导入 GPG 公钥..."
+    if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add - 2>/dev/null; then
+        GPG_SUCCESS=true
+        # Also create the keyring file for signed-by
+        sudo mkdir -p /usr/share/keyrings
+        sudo cp /etc/apt/trusted.gpg /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null || true
+    fi
+fi
+
+# Method 4: Try using apt-key with keyserver
+if [[ "$GPG_SUCCESS" == false ]]; then
+    print_warn "尝试从密钥服务器获取 GPG 密钥..."
+    # Try multiple keyservers
+    for keyserver in "hkp://keyserver.ubuntu.com:80" "keyserver.ubuntu.com" "pgp.mit.edu"; do
+        if sudo apt-key adv --keyserver ${keyserver} --recv-keys 7EA0A9C3F273FCD8 2>/dev/null; then
+            GPG_SUCCESS=true
+            print_info "从 ${keyserver} 成功获取密钥"
+            break
+        fi
+    done
+fi
+
+if [[ "$GPG_SUCCESS" == false ]]; then
+    print_error "所有方法都无法添加 GPG 密钥"
+    print_warn "请检查网络连接或手动运行以下命令："
+    print_warn "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg"
+    exit 1
+fi
+
+# Verify the keyring file exists and is readable
+if [[ ! -f /usr/share/keyrings/docker-archive-keyring.gpg ]] && [[ ! -f /etc/apt/trusted.gpg ]]; then
+    print_error "GPG 密钥文件不存在，无法继续"
+    exit 1
+fi
+
+print_info "GPG 密钥添加成功"
 
 # Set up the stable Docker repository
 print_info "配置 Docker 仓库..."
 ARCH=$(dpkg --print-architecture)
 CODENAME=$(lsb_release -cs)
 
-echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] ${DOCKER_MIRROR}/linux/ubuntu ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null || {
-    print_error "配置 Docker 仓库失败"
-    exit 1
-}
+# Check if keyring file exists to determine if we should use signed-by
+if [[ -f /usr/share/keyrings/docker-archive-keyring.gpg ]]; then
+    echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] ${DOCKER_MIRROR}/linux/ubuntu ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null || {
+        print_error "配置 Docker 仓库失败"
+        exit 1
+    }
+else
+    # Fallback: use apt-key method (no signed-by needed)
+    echo "deb [arch=${ARCH}] ${DOCKER_MIRROR}/linux/ubuntu ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null || {
+        print_error "配置 Docker 仓库失败"
+        exit 1
+    }
+fi
+
+# Verify GPG key is properly imported before updating
+print_info "验证 GPG 密钥..."
+if [[ -f /usr/share/keyrings/docker-archive-keyring.gpg ]]; then
+    if ! gpg --no-default-keyring --keyring /usr/share/keyrings/docker-archive-keyring.gpg --list-keys 2>/dev/null | grep -q "Docker"; then
+        print_warn "密钥文件存在但可能无效，尝试重新导入..."
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null || true
+    fi
+fi
 
 # Update the package index again
 print_info "更新软件包列表（包含 Docker 仓库）..."
-sudo apt update -y || {
-    print_error "更新软件包列表失败，可能是仓库配置有问题"
-    print_warn "尝试清理并重新配置..."
-    sudo rm -f /etc/apt/sources.list.d/docker.list
-    exit 1
-}
+if ! sudo apt update -y 2>&1 | tee /tmp/apt-update.log; then
+    # Check if it's a GPG key error
+    if grep -q "NO_PUBKEY\|GPG error" /tmp/apt-update.log; then
+        print_error "GPG 密钥验证失败"
+        print_warn "尝试重新导入 GPG 密钥..."
+        
+        # Try to get the missing key ID from error
+        MISSING_KEY=$(grep -oP "NO_PUBKEY \K[0-9A-F]+" /tmp/apt-update.log | head -1)
+        if [[ -n "$MISSING_KEY" ]]; then
+            print_info "尝试导入缺失的密钥: $MISSING_KEY"
+            for keyserver in "hkp://keyserver.ubuntu.com:80" "keyserver.ubuntu.com" "pgp.mit.edu"; do
+                if sudo apt-key adv --keyserver ${keyserver} --recv-keys ${MISSING_KEY} 2>/dev/null; then
+                    print_info "成功导入密钥 ${MISSING_KEY}"
+                    # Retry apt update
+                    if sudo apt update -y; then
+                        print_info "更新软件包列表成功"
+                        rm -f /tmp/apt-update.log
+                        break
+                    fi
+                fi
+            done
+        fi
+        
+        # If still failed, try to recreate the keyring
+        print_warn "尝试重新创建密钥环..."
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null || true
+        sudo apt update -y || {
+            print_error "更新软件包列表失败"
+            print_warn "请手动运行以下命令修复："
+            print_warn "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg"
+            rm -f /tmp/apt-update.log
+            exit 1
+        }
+    else
+        print_error "更新软件包列表失败，可能是仓库配置有问题"
+        print_warn "尝试清理并重新配置..."
+        sudo rm -f /etc/apt/sources.list.d/docker.list
+        rm -f /tmp/apt-update.log
+        exit 1
+    fi
+fi
+rm -f /tmp/apt-update.log
 
 # Install Docker Engine
 print_info "安装 Docker Engine..."
